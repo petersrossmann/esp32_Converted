@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#define DEG_STR "\177"
+
 typedef struct {
     uint16_t FontWidth;
     uint16_t FontHeight;
