@@ -7,6 +7,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "config.h"
+#include "config_store.h"
 
 static const char *TAG = "dht22";
 
@@ -46,9 +47,8 @@ esp_err_t dht_read(float *temperature, float *humidity)
         return err;
     }
 
-    /* Old firmware applied offsets from config (temperature in tenths of a
-     * degree, humidity in tenths of a percent). Kept for behaviour parity. */
-    *temperature = t;
-    *humidity = h;
+    /* Apply offsets from config_store (tenths of a degree/percent) */
+    *temperature = t + config_store_get_temperature_offset() / 10.0f;
+    *humidity = h + config_store_get_humidity_offset() / 10.0f;
     return ESP_OK;
 }

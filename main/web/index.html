@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>__DEPLOY__</title>
+<div style="font-size: 1.75em; font-weight: bold; color: #0af; margin-bottom: 4px;">
+    __DEPLOY__
+</div>
+<style>
+body { font-family: sans-serif; margin: 2em; background: #222; color: #eee; }
+h1 { color: #0af; }
+table { border-collapse: collapse; margin: 1em 0; }
+td { border: 1px solid #555; padding: 0.5em; }
+button { background: #0af; color: #fff; border: none; padding: 0.6em 1.2em; border-radius: 4px; cursor: pointer; }
+button.on { background: #fa0; }
+button.off { background: #f55; }
+#msg { margin-top: 1em; font-weight: bold; }
+</style>
+<script>
+function relay(s) {
+  fetch('/relay?state='+s).then(r=>r.text()).then(t=>{document.getElementById('msg').textContent=t;});
+}
+</script>
+</head><body>
+<h1>DispEsp32 Board</h1>
+<table>
+<tr><td>Time</td><td>__TIME__</td></tr>
+<tr><td>Temperature</td><td>__TEMP__</td></tr>
+<tr><td>Humidity</td><td>__HUM__</td></tr>
+<tr><td>Relay (GPIO2)</td><td>__RELAY__</td></tr>
+<tr><td>Contact</td><td>__CONTACT__</td></tr>
+<tr><td>Running partition</td><td>__PART__</td></tr>
+</table>
+<h2>Relay Control</h2>
+<button class="__ROFF__" onclick="relay(0)">OFF</button>
+<button class="__RON__" onclick="relay(1)">ON</button>
+<div id="msg">Ready.</div>
+<p>Page has been loaded <b>__COUNT__</b> times. Software version: __VER__. RSSI: __RSSI__ dBm</p>
+<h2>Navigation</h2>
+<p>
+<button onclick="location.href='/config.tpl'">Config</button>
+<button onclick="location.href='/timeschedule.tpl'">Time Scheduler</button>
+<button onclick="location.href='/duskdawn.tpl'">Dusk/Dawn</button>
+<button onclick="location.href='/display.tpl'">Display</button>
+<button onclick="location.href='/debug.tpl'">Debug</button>
+</p>
+</body></html>

@@ -9,19 +9,19 @@ int config_get_display_timeout_min(void) {
 }
 
 int config_get_display_activity_start_hour(void) {
-    return DISPLAY_ACTIVITY_HOUR;
+    return DISPLAY_ACTIVITY_START_HOUR;
 }
 
 int config_get_display_activity_start_min(void) {
-    return DISPLAY_ACTIVITY_MIN;
+    return DISPLAY_ACTIVITY_START_MIN;
 }
 
 int config_get_display_activity_end_hour(void) {
-    return DISPLAY_ACTIVITY_HOUR2;
+    return DISPLAY_ACTIVITY_END_HOUR;
 }
 
 int config_get_display_activity_end_min(void) {
-    return DISPLAY_ACTIVITY_MIN2;
+    return DISPLAY_ACTIVITY_END_MIN;
 }
 
 bool config_is_display_active(void) {

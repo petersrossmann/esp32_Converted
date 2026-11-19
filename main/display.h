@@ -25,6 +25,11 @@ esp_err_t display_set_rotation(ili9341_rotation_t rotation);
 
 /* HTTP-driven command string (T[...] / L[...] / R[...] / O[...] etc.) */
 esp_err_t display_execute_command(const char *cmd);
+void display_set(const char *cmd);
+const char *display_get(void);
+
+/* Render sensor readings on the display */
+void display_show_readings(const char *time_str, float temp, float humid, bool relay_state);
 
 #ifdef __cplusplus
 }

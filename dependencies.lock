@@ -1,0 +1,54 @@
+dependencies:
+  esp-idf-lib/dht:
+    component_hash: d095cac68fcca3310feb8cdce333ce8952bd42adacb8814c39fdeef7383decdb
+    dependencies:
+    - name: esp-idf-lib/esp_idf_lib_helpers
+      registry_url: https://components.espressif.com
+      require: private
+      version: '*'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.2
+  esp-idf-lib/esp_idf_lib_helpers:
+    component_hash: 2b46288d7500846fe9f5ca7bfa2597067de9e38d94fb0d6ff834639ab02734ba
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.4.2
+  espressif/cmake_utilities:
+    component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.5.3
+  espressif/esp_lcd_ili9341:
+    component_hash: 0baab584e0e490511d6bdbae6aa045130424d732ecdaad6cd1d3bd3c0abe2c30
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.0.2
+  idf:
+    source:
+      type: idf
+    version: 5.0.9
+direct_dependencies:
+- esp-idf-lib/dht
+- espressif/esp_lcd_ili9341
+- idf
+manifest_hash: e30813f3383e4147797f06ff98ba0acb5fce700c12f22d0d7b17a72b87c1e61f
+target: esp32
+version: 2.0.0

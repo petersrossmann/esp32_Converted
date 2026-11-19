@@ -2,7 +2,8 @@
 #include "driver/gpio.h"
 #include "config.h"
 
-static bool g_relay_state = false;
+//extern  bool g_relay_state; // = false;
+extern bool g_relay_state;
 
 esp_err_t relay_init(void)
 {

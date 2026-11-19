@@ -1,4 +1,5 @@
 /*
+ *
  * app_main.c — Converted ESP8266 project entry point.
  *
  * Functionality carried over from the old ESP8266 user/ directory:
@@ -8,49 +9,142 @@
  *   - WiFi AP + captive portal DNS
  *   - NTP time sync
  *   - HTTP server: / (page), /relay, /wifi, /update (OTA)
+ *   - DS18B20 temperature sensor (1-Wire on GPIO4)
  */
+#include "config.h"
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_event.h"
 #include "esp_netif.h"
-#include "esp_wifi.h"
 #include "nvs_flash.h"
+#include "esp_ota_ops.h"
 #include "esp_log.h"
-#include "esp_sntp.h"
 
+#ifdef DISPLAY_ENABLED
 #include "display.h"
+#endif
+#ifdef RELAY_ENABLED
 #include "relay.h"
+#endif
+#ifdef WIFI_ENABLED
 #include "wifi.h"
+#include "esp_wifi.h"
+#endif
+#ifdef NTP_ENABLED
 #include "ntp.h"
+#endif
+#ifdef HTTPD_ENABLED
 #include "httpd.h"
+#endif
 #include "dht22.h"
-#include "config.h"
+
+#ifdef SENSOR_DS18B20
+#include "DS18B20.h"
+#endif
+#ifdef SENSOR_BME280
+#include "bme280.h"
+#include "bme280.h"
+#endif
+#ifdef PORTSTATE_ENABLED
+#include "portstate.h"
+#endif
+#include "ota_client.h"
 
 static const char *TAG = "app_main";
 
+/* Shared globals used by httpd.c and display.c */
+#ifdef RELAY_ENABLED
+bool g_relay_state = false;
+#endif
+float g_ds18b20_temperature = 0.0f;
+bool g_ds18b20_valid = false;
+#ifdef NTP_ENABLED
+bool g_ntp_started = false;
+#endif
+
+static TaskHandle_t dht_display_task_handle = NULL;
+
+/* Forward declarations */
+static void dht_display_task(void *pv);
+
+/* Called when STA gets an IP — kick off NTP sync once. */
+#ifdef NTP_ENABLED
+static void got_ip_handler(void *arg, esp_event_base_t base,
+                           int32_t id, void *data)
+{
+    /* SoftAP abschalten, um den 192.168.4.1-Subnetzkonflikt zu vermeiden */
+    esp_wifi_set_mode(WIFI_MODE_STA);
+
+    if (!g_ntp_started) {
+        g_ntp_started = true;
+        ntp_start();
+    }
+}
+#endif
+
+/*--------------------------------------------------------------------------*
+ * Tasks
+ *--------------------------------------------------------------------------*/
 static void dht_display_task(void *pv)
 {
-    float temperature = 0.0f;
-    float humidity = 0.0f;
+    float temperature = 0.0f, humidity = -1.0f;
+    float ds_temp = 0.0f;
+    uint32_t tick = 0;
 
     while (1) {
-        if (dht_read(&temperature, &humidity) == ESP_OK) {
-            ntp_update_time();
-            printf("[%s] TEMP %.1f C  HUM %.1f %%\n",
-                   ntp_get_time_str(), temperature, humidity);
-            display_show_readings(ntp_get_time_str(), temperature, humidity,
-                                  relay_get());
-        } else {
-            ESP_LOGW(TAG, "DHT read failed");
+#ifdef NTP_ENABLED
+        ntp_update_time();
+#endif
+
+        /* Sensoren nur alle 8 Sekunden auslesen (DHT22 & DS18B20 schonen) */
+        if ((tick % 8) == 0) {
+#ifdef SENSOR_DHT22
+            if (dht_read(&temperature, &humidity) != ESP_OK) {
+                ESP_LOGW(TAG, "DHT read failed");
+            }
+#endif
+
+#ifdef SENSOR_DS18B20
+            if (ds18b20_measure_temperature(&ds_temp) == ESP_OK) {
+                g_ds18b20_temperature = ds_temp;
+                g_ds18b20_valid = true;
+                temperature = ds_temp;
+//               ESP_LOGI(TAG, "DS18B20: %.2f C", ds_temp);
+            } else {
+                g_ds18b20_valid = false;
+            }
+#endif
         }
-        vTaskDelay(pdMS_TO_TICKS(2000));
+
+#ifdef DISPLAY_ENABLED
+        display_show_readings(
+#ifdef NTP_ENABLED
+            ntp_get_time_str(),
+#else
+            "--:--:--",
+#endif
+            temperature,
+            humidity,
+#ifdef RELAY_ENABLED
+            g_relay_state
+#else
+            false
+#endif
+        );
+#endif
+
+        tick++;
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
+
 void app_main(void)
 {
+    /* NVS init */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -58,72 +152,85 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+#if 0
+    /* Mount SPIFFS for web content */
+    {
+        esp_vfs_spiffs_conf_t spiffs_conf = {
+            .base_path = "/spiffs",
+            .partition_label = NULL,
+            .max_files = 5,
+            .format_if_mount_failed = false,
+        };
+        esp_err_t spiffs_ret = esp_vfs_spiffs_register(&spiffs_conf);
+        if (spiffs_ret != ESP_OK) {
+            ESP_LOGI(TAG, "SPIFFS mount: %d (may already be mounted)", spiffs_ret);
+        } else {
+            ESP_LOGI(TAG, "SPIFFS mounted at /spiffs");
+        }
+    }
+#endif
+    /* Event loop & netifs */
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-    ESP_ERROR_CHECK(relay_init());
+    /* Register IP event handler for NTP */
+#ifdef NTP_ENABLED
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                                &got_ip_handler, NULL));
+#endif
+
+    /* Relay init */
+#ifdef RELAY_ENABLED
+    relay_init();
     relay_set(RELAY_DEFAULT ? true : false);   /* GPIO2 LOW at boot */
+#endif
 
-    ESP_ERROR_CHECK(display_init());
-    ESP_ERROR_CHECK(dht_init());
+    /* Display init (ILI9341) */
+#ifdef DISPLAY_ENABLED
+    display_init();
+#endif
 
-    ESP_ERROR_CHECK(wifi_init());
-    ESP_ERROR_CHECK(ntp_init());
-    ESP_ERROR_CHECK(httpd_init());
+    /* Sensors */
+#ifdef SENSOR_DHT22
+    dht_init();
+#endif
 
-    xTaskCreate(dht_display_task, "dht_display", 4096, NULL, 5, NULL);
+    /* DS18B20 init on GPIO4 */
+#ifdef SENSOR_DS18B20
+    ds18b20_init(DS18B20_GPIO, DS18B20_12_BIT);
+#endif
 
-    ESP_LOGI(TAG, "ready (sw %s)", SW_VERSION);
-}
+#ifdef SENSOR_BME280
+    bme280_init();
+#endif
 
-/* Stub HTTP server implementations (should be expanded in a full conversion) */
+#ifdef PORTSTATE_ENABLED
+    portstate_init();
+#endif
 
-esp_err_t httpd_init(void);
+    /* WiFi & captive portal */
+#ifdef WIFI_ENABLED
+    wifi_init();
+#endif
 
-/* Stub display implementation */
-esp_err_t display_init(void);
+    /* NTP sync */
+#ifdef NTP_ENABLED
+    ntp_init();
+#endif
 
-esp_err_t display_text(uint16_t x, uint16_t y, const char *text, uint16_t fg, uint16_t bg)
-{
-    return ESP_OK;
-}
+    /* HTTP server */
+#ifdef HTTPD_ENABLED
+    httpd_init();
+#endif
 
-esp_err_t display_line(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t color)
-{
-    return ESP_OK;
-}
+#ifdef OTA_ENABLED
+    ota_client_start();
+#endif
 
-esp_err_t display_circle(uint16_t x, uint16_t y, uint16_t r, uint16_t color)
-{
-    return ESP_OK;
-}
+    /* Create task */
+#ifdef DISPLAY_ENABLED
+    xTaskCreate(dht_display_task, "dht_display", 4096, NULL, 5, &dht_display_task_handle);
+#endif
 
-esp_err_t display_filled_circle(uint16_t x, uint16_t y, uint16_t r, uint16_t color)
-{
-    return ESP_OK;
-}
-
-esp_err_t display_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
-{
-    return ESP_OK;
-}
-
-esp_err_t display_filled_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
-{
-    return ESP_OK;
-}
-
-esp_err_t display_set_rotation(ili9341_rotation_t rotation)
-{
-    return ESP_OK;
-}
-
-esp_err_t display_execute_command(const char *cmd)
-{
-    return ESP_OK;
-}
-
-void display_show_readings(const char *time_str, float temp, float humid, bool relay_state)
-{
-    /* TODO: render the current sensor values and relay state on the ILI9341 */
+    ESP_LOGI(TAG, "ready (sw %s)", esp_app_get_description()->version);
 }
