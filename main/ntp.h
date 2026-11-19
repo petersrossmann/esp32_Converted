@@ -24,6 +24,7 @@ typedef struct {
 
 esp_err_t ntp_init(void);
 void ntp_start(void);
+void ntp_apply_timezone_config(void);
 void ntp_update_time(void);
 bool ntp_is_synced(void);
 const char *ntp_get_time_str(void);

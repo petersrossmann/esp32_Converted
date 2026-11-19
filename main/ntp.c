@@ -1,14 +1,7 @@
 /*
  * ntp.c — NTP time sync, DST, dusk/dawn calculation, and time scheduler.
- *
- * Ported from the original ESP8266 user/ntp.c functionality:
- *   - SNTP time sync via esp_sntp
- *   - DST auto-detection (German rules)
- *   - Dusk/dawn calculation via sunriset
- *   - Time scheduler (relay on/off at configured times)
- *   - Weekly auto-restart
- *   - Heap monitoring with auto-restart
  */
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
@@ -16,9 +9,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "esp_sntp.h"
 #include "esp_log.h"
-#include "esp_system.h"
 #include "driver/gpio.h"
 #include "config.h"
 #include "ntp.h"
@@ -38,13 +31,10 @@ static time_t s_timestamp = 0;
 static uint8_t s_rise_hour = 0, s_rise_min = 0;
 static uint8_t s_set_hour = 0, s_set_min = 0;
 static bool s_duskdawn_valid = false;
+static bool s_duskdawn_calculated = false;
 
 /* Last known time for scheduler */
 static uint8_t s_last_hour = 0xff, s_last_min = 0xff;
-
-/* DST cache */
-static int8_t s_dst = -1; /* -1 = unknown, 0 = no, 1 = yes */
-static bool s_duskdawn_calculated = false;
 
 /*--------------------------------------------------------------------------*
  * Time table defines
@@ -53,12 +43,9 @@ static bool s_duskdawn_calculated = false;
 #define BIT_DAWN (1 << 14)
 #define BIT_DUSK (1 << 13)
 #define EMPTY_CELL 0x2603
-#define CONFIG__BIT_AUTO_DST     (1 << 1)
-
-/* TimeListElt type now lives in ntp.h */
+#define CONFIG__BIT_AUTO_DST (1 << 1)
 
 /* In-memory time table (16 entries: 8 fixed + 8 dusk/dawn-based) */
-/* Eventually should live in NVS */
 static TimeListElt s_timelist[16];
 static bool s_timelist_initialized = false;
 
@@ -93,7 +80,11 @@ void ntp_save_timelist(void)
     }
 }
 
-TimeListElt *ntp_get_timelist(void) { init_timelist(); return s_timelist; }
+TimeListElt *ntp_get_timelist(void)
+{
+    init_timelist();
+    return s_timelist;
+}
 
 /*--------------------------------------------------------------------------*
  * Relay switching helper
@@ -109,27 +100,28 @@ static void switch_relay(int on_off)
 }
 
 /*--------------------------------------------------------------------------*
- * DST detection (German rules)
+ * Apply timezone & DST settings from config_store
  *--------------------------------------------------------------------------*/
-static bool is_dst(struct tm *dt)
+void ntp_apply_timezone_config(void)
 {
-    /* Check if AUTO_DST is enabled in config_store */
-    if (!(config_store_get_status() & CONFIG__BIT_AUTO_DST))
-        return false;
+    long tz = config_store_get_ntp_timezone();
+    bool auto_dst = (config_store_get_status() & CONFIG__BIT_AUTO_DST) != 0;
 
-    int mon = dt->tm_mon + 1;
-    if (mon < 3 || mon > 10) return false;
-    if (mon > 3 && mon < 10) return true;
-
-    int wday = dt->tm_wday;
-    if (dt->tm_mday - wday >= 25) {
-        if (wday || dt->tm_hour >= 2)
-            return (mon == 3);
-        return (mon != 10);
+    /* Note: POSIX TZ signs are inverted (GMT+1 is written as UTC-1) */
+    char tz_str[64];
+    if (auto_dst) {
+        snprintf(tz_str, sizeof(tz_str), "UTC%+ldDST%+ld,M3.5.0,M10.5.0/3", -tz, -(tz + 1));
     } else {
-        if (mon == 10) return false;
-        return true;
+        snprintf(tz_str, sizeof(tz_str), "UTC%+ld", -tz);
     }
+
+    setenv("TZ", tz_str, 1);
+    tzset();
+
+    /* Force dusk/dawn recalculation with new offset */
+    s_duskdawn_calculated = false;
+    ESP_LOGI(TAG, "Timezone configured: %s (GMT%+ld, Auto-DST: %s)",
+             tz_str, tz, auto_dst ? "ON" : "OFF");
 }
 
 /*--------------------------------------------------------------------------*
@@ -137,7 +129,10 @@ static bool is_dst(struct tm *dt)
  *--------------------------------------------------------------------------*/
 static void calculate_duskdawn(struct tm *dt)
 {
-    if (!dt) { s_duskdawn_valid = false; return; }
+    if (!dt) {
+        s_duskdawn_valid = false;
+        return;
+    }
 
     double rise, set;
     double lon = config_store_get_longitude();
@@ -146,17 +141,14 @@ static void calculate_duskdawn(struct tm *dt)
     int rc = sun_rise_set(dt->tm_year + 1900, dt->tm_mon + 1, dt->tm_mday,
                           lon, lat, &rise, &set);
     if (rc == 0 || rc == 1) {
-        /* Refresh DST state based on current date and Auto-DST flag */
-        s_dst = is_dst(dt) ? 1 : 0;
-
-        /* GMT offset from config_store (e.g. 1 for CET) + 1 if DST active */
         long tz = config_store_get_ntp_timezone();
-        if (s_dst > 0) tz++;
+        if (dt->tm_isdst > 0) {
+            tz++;
+        }
 
         double r = rise + tz;
         double s = set  + tz;
 
-        /* Normalize into 0.0 .. 24.0 range */
         while (r < 0.0)   r += 24.0;
         while (r >= 24.0) r -= 24.0;
         while (s < 0.0)   s += 24.0;
@@ -164,11 +156,17 @@ static void calculate_duskdawn(struct tm *dt)
 
         s_rise_hour = (int)r;
         s_rise_min  = (int)((r - s_rise_hour) * 60.0 + 0.5);
-        if (s_rise_min == 60) { s_rise_min = 0; s_rise_hour = (s_rise_hour + 1) % 24; }
+        if (s_rise_min == 60) {
+            s_rise_min = 0;
+            s_rise_hour = (s_rise_hour + 1) % 24;
+        }
 
         s_set_hour  = (int)s;
         s_set_min   = (int)((s - s_set_hour) * 60.0 + 0.5);
-        if (s_set_min == 60) { s_set_min = 0; s_set_hour = (s_set_hour + 1) % 24; }
+        if (s_set_min == 60) {
+            s_set_min = 0;
+            s_set_hour = (s_set_hour + 1) % 24;
+        }
 
         s_duskdawn_valid = true;
         s_duskdawn_calculated = true;
@@ -178,13 +176,12 @@ static void calculate_duskdawn(struct tm *dt)
         s_duskdawn_valid = false;
     }
 }
-
 /*--------------------------------------------------------------------------*
  * Night detection
  *--------------------------------------------------------------------------*/
 static bool is_night(uint8_t hour, uint8_t minute)
 {
-    if (!s_duskdawn_valid || s_timestamp < 1000)
+    if (!s_duskdawn_valid || s_timestamp < 100000)
         return false;
     if (hour > s_set_hour || hour < s_rise_hour)
         return true;
@@ -205,17 +202,18 @@ static void time_scheduler(struct tm *dt)
     uint8_t minute = dt->tm_min;
     uint8_t wday = dt->tm_wday;
 
-    /* If this minute was already processed, skip */
     if (hour == s_last_hour && minute == s_last_min)
         return;
     s_last_hour = hour;
     s_last_min  = minute;
 
-    /* Recalculate dusk/dawn at midnight or on first run */
-    if ((hour == 0 && minute == 0) || !s_duskdawn_calculated)
+    if ((hour == 0 && minute == 0) ||
+        (hour == 2 && minute == 0) ||
+        (hour == 3 && minute == 0) ||
+        !s_duskdawn_calculated) {
         calculate_duskdawn(dt);
+    }
 
-    /* Iterate time list and trigger relay actions */
     for (int k = 0; k < 16; k++) {
         uint16_t st = s_timelist[k].status;
         if (!(st & BIT_VALID))
@@ -229,7 +227,6 @@ static void time_scheduler(struct tm *dt)
         uint8_t off_h = s_timelist[k].hour_off;
         uint8_t off_m = s_timelist[k].minute_off;
 
-        /* Entries 8..15: Dusk/Dawn with signed minute offsets */
         if (k >= 8) {
             if (!s_duskdawn_valid)
                 continue;
@@ -253,7 +250,6 @@ static void time_scheduler(struct tm *dt)
             off_h = total_off / 60;
             off_m = total_off % 60;
         } else if (s_timelist[k].runtime > 0 && s_timelist[k].runtime < 255) {
-            /* Optional random jitter for fixed schedules when runtime > 0 */
             int r = rand() % s_timelist[k].runtime;
             int on_min  = (on_h * 60 + on_m) + r;
             int off_min = (off_h * 60 + off_m) + r;
@@ -265,13 +261,11 @@ static void time_scheduler(struct tm *dt)
             off_m = off_min % 60;
         }
 
-        /* ON time matches? */
         if (on_h == hour && on_m == minute) {
             switch_relay(1);
             break;
         }
 
-        /* OFF time matches? */
         if (off_h == hour && off_m == minute) {
             switch_relay(0);
             break;
@@ -280,7 +274,7 @@ static void time_scheduler(struct tm *dt)
 }
 
 /*--------------------------------------------------------------------------*
- * SNTP sync notification callback
+ * SNTP sync notification callback & periodic task
  *--------------------------------------------------------------------------*/
 static void ntp_sync_notification_cb(struct timeval *tv)
 {
@@ -290,9 +284,6 @@ static void ntp_sync_notification_cb(struct timeval *tv)
     }
 }
 
-/*--------------------------------------------------------------------------*
- * Periodic NTP timer callback (every second)
- *--------------------------------------------------------------------------*/
 static void ntp_timer_task(void *pv)
 {
     while (1) {
@@ -301,14 +292,11 @@ static void ntp_timer_task(void *pv)
         time_t now;
         time(&now);
         if (now < 100000)
-            continue; /* not yet synced */
+            continue;
 
         s_timestamp = now;
         struct tm dt;
         localtime_r(&s_timestamp, &dt);
-        if (s_dst == -1) {
-            s_dst = is_dst(&dt) ? 1 : 0;
-        }
         time_scheduler(&dt);
     }
 }
@@ -318,16 +306,11 @@ static void ntp_timer_task(void *pv)
  *--------------------------------------------------------------------------*/
 esp_err_t ntp_init(void)
 {
-    /* Seed random for scheduler jitter */
     srand(esp_random());
-
-    /* Deutsche Zeitzone (MEZ/MESZ inkl. automatischer Sommerzeit) setzen */
-    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-    tzset();
+    ntp_apply_timezone_config();
 
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
 
-    /* WICHTIG: static, da esp_sntp_setservername() nur den Pointer speichert! */
     static char ntp_srv[64];
     config_store_get_ntp_server(ntp_srv, sizeof(ntp_srv));
     if (ntp_srv[0] == '\0') {
@@ -339,20 +322,23 @@ esp_err_t ntp_init(void)
     esp_sntp_setservername(1, "de.pool.ntp.org");
     sntp_set_time_sync_notification_cb(ntp_sync_notification_cb);
 
-    /* Start periodic timer task */
     xTaskCreate(ntp_timer_task, "ntp_timer", 4096, NULL, 3, NULL);
-esp_sntp_init(); 
-ESP_LOGI(TAG, "SNTP started with server: %s", ntp_srv);
+    esp_sntp_init();
+    ESP_LOGI(TAG, "SNTP started with server: %s", ntp_srv);
 
     return ESP_OK;
 }
-
 
 void ntp_start(void)
 {
     if (!esp_sntp_enabled()) {
         esp_sntp_init();
     }
+}
+
+bool ntp_is_synced(void)
+{
+    return s_synced;
 }
 
 void ntp_update_time(void)
@@ -362,17 +348,13 @@ void ntp_update_time(void)
     time(&now);
     if (now > 100000) {
         s_timestamp = now;
-        struct tm dt;
-        localtime_r(&now, &dt);
-        if (s_dst == -1) {
-            s_dst = is_dst(&dt) ? 1 : 0;
-        }
         if (s_synced && !logged_sync) {
             logged_sync = true;
             ESP_LOGI(TAG, "time synced: %s", ntp_get_time_str());
         }
     }
 }
+
 const char *ntp_get_time_str(void)
 {
     static char buf[32];
@@ -403,6 +385,8 @@ void ntp_get_actual_time(int *hour, int *minute, int *wday)
 
 bool ntp_is_night(void)
 {
+    if (s_timestamp < 100000)
+        return false;
     struct tm tm;
     localtime_r(&s_timestamp, &tm);
     return is_night(tm.tm_hour, tm.tm_min);
