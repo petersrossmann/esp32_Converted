@@ -46,9 +46,8 @@
 #endif
 #ifdef SENSOR_BME280
 #include "bme280.h"
-#include "bme280.h"
 #endif
-#ifdef PORTSTATE_ENABLED
+#if defined(PORTSTATE_ENABLED) || defined(RX_PORTSTATE_ENABLED)
 #include "portstate.h"
 #endif
 #include "ota_client.h"
@@ -115,6 +114,12 @@ static void dht_display_task(void *pv)
 //               ESP_LOGI(TAG, "DS18B20: %.2f C", ds_temp);
             } else {
                 g_ds18b20_valid = false;
+            }
+#endif
+#ifdef SENSOR_BME280
+            float press = 0.0f;
+            if (bme280_read(&temperature, &press, &humidity) != ESP_OK) {
+                ESP_LOGW(TAG, "BME280 read failed");
             }
 #endif
         }
@@ -204,7 +209,7 @@ void app_main(void)
     bme280_init();
 #endif
 
-#ifdef PORTSTATE_ENABLED
+#if defined(PORTSTATE_ENABLED) || defined(RX_PORTSTATE_ENABLED)
     portstate_init();
 #endif
 

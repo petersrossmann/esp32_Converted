@@ -7,6 +7,7 @@
 #include "wifi.h"
 #include "ntp.h"
 #include "dht22.h"
+#include "bme280.h"
 #include "config_store.h"
 #include "display.h"
 #include "portstate.h"
@@ -39,6 +40,8 @@ extern const char duskdawn_tpl_start[]     asm("_binary_duskdawn_tpl_start");
 extern const char display_tpl_start[]      asm("_binary_display_tpl_start");
 extern const char debug_tpl_start[]        asm("_binary_debug_tpl_start");
 extern const char index_html_start[]       asm("_binary_index_html_start");
+extern const uint8_t favicon_ico_start[] asm("_binary_favicon_ico_start");
+extern const uint8_t favicon_ico_end[]   asm("_binary_favicon_ico_end");
 
 static bool exact_match(const char *ref, const char *uri, size_t len)
 {
@@ -92,6 +95,7 @@ static esp_err_t display_cgi_handler(httpd_req_t *req);
 static esp_err_t sched_handler(httpd_req_t *req);
 static esp_err_t sched_set_handler(httpd_req_t *req);
 static esp_err_t ota_check_handler(httpd_req_t *req);
+static esp_err_t favicon_handler(httpd_req_t *req);
 
 esp_err_t httpd_init(void)
 {
@@ -141,6 +145,7 @@ esp_err_t httpd_init(void)
     { httpd_uri_t u = { .uri = "/", .method = HTTP_GET, .handler = root_handler }; httpd_register_uri_handler(s_httpd, &u); }
     { httpd_uri_t u = { .uri = "/testmail", .method = HTTP_GET, .handler = testmail_handler }; httpd_register_uri_handler(s_httpd, &u); }
     { httpd_uri_t u = { .uri = "/ota_check", .method = HTTP_GET, .handler = ota_check_handler }; httpd_register_uri_handler(s_httpd, &u); }
+    { httpd_uri_t u = { .uri = "/favicon.ico", .method = HTTP_GET, .handler = favicon_handler }; httpd_register_uri_handler(s_httpd, &u); }
 
     ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);
     return ESP_OK;
@@ -171,21 +176,31 @@ static esp_err_t root_handler(httpd_req_t *req)
     const char *html = index_html_start;
     size_t file_len = strlen(html);
 #endif
-    float humidity = 0.0f, temperature = 0.0f;
+    float humidity = 0.0f, temperature = 0.0f; 
+    float pressure = 0.0f;
     char temp_str[32] = "n/a";
     char hum_str[32]  = "n/a";
+    char press_str[32] = "n/a";
 
 #ifdef SENSOR_DHT22
 //    float humidity = 0.0f, temperature = 0.0f;
     if (dht_read(&temperature, &humidity) == ESP_OK) {
-        snprintf(temp_str, sizeof(temp_str), "%.1f C", temperature);
+        snprintf(temp_str, sizeof(temp_str), "%.1f &deg;C", temperature);
         snprintf(hum_str, sizeof(hum_str), "%.1f %%", humidity);
     }
 #endif
 
 #ifdef SENSOR_DS18B20
     if (g_ds18b20_valid) {
-        snprintf(temp_str, sizeof(temp_str), "%.2f C", g_ds18b20_temperature);
+        snprintf(temp_str, sizeof(temp_str), "%.2f &deg;C", g_ds18b20_temperature);
+    }
+#endif
+
+#ifdef SENSOR_BME280
+    if (bme280_read(&temperature, &pressure, &humidity) == ESP_OK) {
+        snprintf(temp_str, sizeof(temp_str), "%.1f &deg;C", temperature);
+        snprintf(hum_str, sizeof(hum_str), "%.1f %%", humidity);
+        snprintf(press_str, sizeof(press_str), "%.1f hPa", pressure);
     }
 #endif
 
@@ -236,6 +251,7 @@ static esp_err_t root_handler(httpd_req_t *req)
 
         if (strncmp(p, "__TIME__", 8) == 0)        { out += snprintf(out, 32, "%s", time_str); p += 8; }
         else if (strncmp(p, "__TEMP__", 8) == 0)   { out += snprintf(out, 32, "%s", temp_str); p += 8; }
+        else if (strncmp(p, "__PRESS__", 9) == 0)  { out += snprintf(out, 32, "%s", press_str); p += 9; }        
         else if (strncmp(p, "__HUM__", 7) == 0)    { out += snprintf(out, 32, "%s", hum_str); p += 7; }
         else if (strncmp(p, "__RELAY__", 9) == 0)  { out += snprintf(out, 32, "%s", relay_txt); p += 9; }
         else if (strncmp(p, "__PART__", 8) == 0)   { out += snprintf(out, 64, "%s", part_str); p += 8; }
@@ -256,6 +272,14 @@ static esp_err_t root_handler(httpd_req_t *req)
     httpd_resp_send(req, out_buf, out - out_buf);
     free(out_buf);
     return ESP_OK;
+}
+
+static esp_err_t favicon_handler(httpd_req_t *req)
+{
+    const size_t favicon_size = (favicon_ico_end - favicon_ico_start);
+    httpd_resp_set_type(req, "image/x-icon");
+    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=86400");
+    return httpd_resp_send(req, (const char *)favicon_ico_start, favicon_size);
 }
 
 
@@ -470,7 +494,6 @@ static esp_err_t config_handler(httpd_req_t *req)
         n += snprintf(buf + n, sizeof(buf) - n, "disp_act_start=%02d:%02d\n", sh, sm);
     }
     config_store_get_deployment(s, sizeof(s)); // <-- HIER EINFÜGEN!
-    n += snprintf(buf + n, sizeof(buf) - n, "deploy=%s\n", s);
     n += snprintf(buf + n, sizeof(buf) - n, "deploy=%s\n", s);
     n += snprintf(buf + n, sizeof(buf) - n, "lat=%g\n", config_store_get_latitude());
     n += snprintf(buf + n, sizeof(buf) - n, "lon=%g\n", config_store_get_longitude());

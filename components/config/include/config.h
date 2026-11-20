@@ -13,9 +13,9 @@
 /* Comment out to disable a feature — each changes the compiled binary */
 
 /* --- Sensors --- */
-#define SENSOR_DHT22
+#define xSENSOR_DHT22
 #define xSENSOR_DS18B20
-#define xSENSOR_BME280
+#define SENSOR_BME280
 
 /* --- Outputs --- */
 #define RELAY_ENABLED
@@ -31,7 +31,7 @@
 
 /* --- Port state / contact --- */
 //#define PORTSTATE_ENABLED         /* Contact sensor instead of temperature */
-//#define RX_PORTSTATE_ENABLED      /* Contact on RXD */
+#define RX_PORTSTATE_ENABLED      /* Contact on RXD */
 
 /* --- Automation --- */
 //#define THERMOSTAT_ENABLED
@@ -39,7 +39,7 @@
 //#define OBI_PLUG_ENABLED          /* OBI WiFi plug variant */
 //#define SWITCH_ON_CONTACT_ENABLED
 //#define SWITCH_ON_CONTACT_NIGHT_ENABLED
-//#define TOGGLE_RELAYS_SWITCH_ENABLED
+#define TOGGLE_RELAYS_SWITCH
 //#define PORTSTATE_EMAIL_ENABLED
 
 /* --- Other --- */

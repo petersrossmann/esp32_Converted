@@ -51,7 +51,7 @@ extern "C" {
 #define BME280_TSB_10  0x06
 #define BME280_TSB_20  0x07
 
-#define SEALEVEL 167 /* meters above sea level for pressure compensation */
+#define SEALEVEL 160 /* meters above sea level for pressure compensation */
 
 esp_err_t bme280_init(void);
 esp_err_t bme280_read(float *temp_c, float *press_hpa, float *hum_pct);

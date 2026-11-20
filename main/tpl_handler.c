@@ -18,6 +18,11 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+#ifdef SENSOR_DS18B20
+extern float g_ds18b20_temperature;
+extern bool g_ds18b20_valid;
+#endif
+
 #define SZ_TMP 16
 #define SZ_HEX 3
 #define SZ_BUF 64
@@ -157,8 +162,19 @@ static char *fill_template(const char *html, int *out_len, float temp, float hum
 
 static int serve_template(httpd_req_t *req, const char *tpl_start)
 {
-    float temp = 0, hum = 0;
+    float temp = 0.0f, hum = 0.0f;
+
+#ifdef SENSOR_DHT22
     dht_read(&temp, &hum);
+#elif defined(SENSOR_BME280)
+    float press = 0.0f;
+    bme280_read(&temp, &press, &hum);
+#elif defined(SENSOR_DS18B20)
+    if (g_ds18b20_valid) {
+        temp = g_ds18b20_temperature;
+    }
+#endif
+
     int len;
     char *out = fill_template(tpl_start, &len, temp, hum);
     if (!out) { httpd_resp_send_err(req, 500, "tpl error"); return ESP_FAIL; }

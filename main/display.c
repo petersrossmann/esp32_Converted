@@ -17,6 +17,7 @@
 #include "freertos/semphr.h"
 #include "freertos/timers.h"
 #include "ntp.h"
+#include "esp_wifi.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -178,7 +179,9 @@ static void draw_str_bg(int x, int y, const char *str, TM_FontDef_t *font, uint1
 
     int h = font->FontHeight;
     int w = font->FontWidth;
-    int adv = w + 1;
+//    int adv = w + 1;
+    int adv = w; 
+
     uint16_t fg_be = swap16(fg);
     uint16_t bg_be = swap16(bg);
 
@@ -378,6 +381,15 @@ esp_err_t display_init(void)
     ESP_LOGI(TAG, "ILI9341 ready"); return ESP_OK;
 }
 
+static int get_wifi_rssi(void)
+{
+    int rssi = 0;
+    if (esp_wifi_sta_get_rssi(&rssi) == ESP_OK) {
+        return rssi;
+    }
+    return 0;
+}
+
 void display_show_readings(const char *time_str, float temp, float humid, bool relay_state)
 {
     if (!s_panel) return;
@@ -387,20 +399,22 @@ void display_show_readings(const char *time_str, float temp, float humid, bool r
 
     char line[64];
 
-    snprintf(line, sizeof(line), "Zeit: %s   ",
-             (time_str && strlen(time_str) > 0) ? time_str : "--:--:--");
-    draw_str_bg(10, 5, line, &TM_Font_11x18, 0xFFFF, TOP_BG_COLOR);
+    snprintf(line, sizeof(line), "%s", (time_str && strlen(time_str) > 0) ? time_str : "--:--:--");
+    draw_str_bg(0, 2, line, &TM_Font_16x26, 0xFFFF, TOP_BG_COLOR);
 
-    snprintf(line, sizeof(line), "Innen: %.2f\177C   ", temp);
-    draw_str_bg(10, 28, line, &TM_Font_11x18, 0x07E0, TOP_BG_COLOR);
+    snprintf(line, sizeof(line), "%.2f\177C   ", temp);
+    draw_str_bg(0, 32, line, &TM_Font_16x26, 0xFFFF, TOP_BG_COLOR);
 
     if (humid >= 0.0f) {
-        snprintf(line, sizeof(line), "Hum:   %.1f %%   ", humid);
-        draw_str_bg(10, 51, line, &TM_Font_11x18, 0x07FF, TOP_BG_COLOR);
+        snprintf(line, sizeof(line), "%.1f %%   ", humid);
+        draw_str_bg(140, 32, line, &TM_Font_16x26, 0xFFFF, TOP_BG_COLOR);
     }
 
-    snprintf(line, sizeof(line), "Relais: %s ", relay_state ? "EIN" : "AUS");
-    draw_str_bg(10, 74, line, &TM_Font_11x18, relay_state ? 0xF800 : 0xC618, TOP_BG_COLOR);
+    snprintf(line, sizeof(line), "%d ", get_wifi_rssi());
+    draw_str_bg(256, 33, line, &TM_Font_16x26, 0xFFFF, TOP_BG_COLOR);
+
+//    snprintf(line, sizeof(line), "Relais: %s ", relay_state ? "EIN" : "AUS");
+//    draw_str_bg(10, 74, line, &TM_Font_11x18, relay_state ? 0xF800 : 0xC618, TOP_BG_COLOR);
 
     if (s_display_mutex) {
         xSemaphoreGive(s_display_mutex);

@@ -126,7 +126,21 @@ esp_err_t bme280_init(void)
     };
     ESP_ERROR_CHECK(i2c_param_config(I2C_PORT, &conf));
     ESP_ERROR_CHECK(i2c_driver_install(I2C_PORT, I2C_MODE_MASTER, 0, 0, 0));
-
+#if 0
+    /* --- Quick I2C Scanner --- */
+    ESP_LOGI(TAG, "Scanning I2C bus (SDA=%d, SCL=%d)...", I2C_MASTER_SDA_GPIO, I2C_MASTER_SCL_GPIO);
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_stop(cmd);
+        esp_err_t ret = i2c_master_cmd_begin(I2C_PORT, cmd, pdMS_TO_TICKS(50));
+        i2c_cmd_link_delete(cmd);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "I2C device found at 0x%02X", addr);
+        }
+    }
+#endif
     uint8_t id = 0;
     if (i2c_read_reg(ID_REG, &id, 1) != ESP_OK || id != 0x60) {
         ESP_LOGE(TAG, "BME280 not found (ID=0x%02x)", id);
@@ -193,7 +207,9 @@ esp_err_t bme280_read(float *temp_c, float *press_hpa, float *hum_pct)
 
     if (temp_c)    *temp_c    = t_raw / 100.0f + config_store_get_temperature_offset() / 10.0f;
     if (press_hpa) *press_hpa = (p_raw >> 8) / 100.0f;
-    if (hum_pct)   *hum_pct   = (h_raw >> 12) / 100.0f + config_store_get_humidity_offset() / 10.0f;
+//    if (hum_pct)   *hum_pct   = (h_raw >> 12) / 100.0f + config_store_get_humidity_offset() / 10.0f;
+    if (hum_pct) *hum_pct = (h_raw / 1024.0f) + config_store_get_humidity_offset() / 10.0f;  /* Bosch formula */
+
 
     return ESP_OK;
 }

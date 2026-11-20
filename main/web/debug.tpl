@@ -5,7 +5,7 @@
 <p>Version: %ver%</p>
 <p>Free heap: %heap%</p>
 <p>Time: %time%</p>
-<p>Temp: %temp% C &nbsp; Hum: %hum% %</p>
+<p>Temp: %temp% &deg;C &nbsp; Hum: %hum% %</p>
 <p>Relay: %relay%</p>
 <p>Debug Level: %DebugLevel%</p>
 <h2>SMTP Mail Test</h2>

@@ -6,15 +6,21 @@
 #include "dht.h"                 /* esp-idf-lib/dht component header */
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "config.h"
 #include "config_store.h"
 
 static const char *TAG = "dht22";
 
-/* Expose DHT_DATA_GPIO so it can be referenced from config.h (or vice versa) */
 #ifndef DHT_DATA_GPIO
 #define DHT_DATA_GPIO GPIO_NUM_0
 #endif
+
+static float s_last_temp = 0.0f;
+static float s_last_hum  = 0.0f;
+static bool  s_has_valid = false;
+static TickType_t s_last_read_tick = 0;
 
 esp_err_t dht_init(void)
 {
@@ -40,15 +46,41 @@ esp_err_t dht_read(float *temperature, float *humidity)
         return ESP_ERR_INVALID_ARG;
     }
 
+    TickType_t now = xTaskGetTickCount();
+
+    /* Wenn letzte gültige Messung < 2.5s her ist (z.B. Webseiten-Aufruf), Cache zurückgeben */
+    if (s_has_valid && (now - s_last_read_tick) < pdMS_TO_TICKS(2500)) {
+        *temperature = s_last_temp + config_store_get_temperature_offset() / 10.0f;
+        *humidity    = s_last_hum  + config_store_get_humidity_offset() / 10.0f;
+        return ESP_OK;
+    }
+
     float h = 0.0f, t = 0.0f;
     esp_err_t err = dht_read_float_data(DHT_TYPE_AM2301, DHT_DATA_GPIO, &h, &t);
+
+    /* Bei sporadischem Interrupt-Timeout einmal nach 2.1s wiederholen */
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "dht_read_float_data failed: %d", err);
-        return err;
+        ESP_LOGW(TAG, "dht_read retry after error: %d", err);
+        vTaskDelay(pdMS_TO_TICKS(2100));
+        err = dht_read_float_data(DHT_TYPE_AM2301, DHT_DATA_GPIO, &h, &t);
+    }
+
+    s_last_read_tick = xTaskGetTickCount();
+
+    if (err == ESP_OK) {
+        s_last_temp = t;
+        s_last_hum  = h;
+        s_has_valid = true;
+    } else {
+        ESP_LOGW(TAG, "dht_read_float_data failed after retry: %d", err);
+        if (!s_has_valid) {
+            return err;
+        }
+        /* Bei Fehler letzten gültigen Messwert verwenden */
     }
 
     /* Apply offsets from config_store (tenths of a degree/percent) */
-    *temperature = t + config_store_get_temperature_offset() / 10.0f;
-    *humidity = h + config_store_get_humidity_offset() / 10.0f;
+    *temperature = s_last_temp + config_store_get_temperature_offset() / 10.0f;
+    *humidity    = s_last_hum  + config_store_get_humidity_offset() / 10.0f;
     return ESP_OK;
 }

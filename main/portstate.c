@@ -51,32 +51,30 @@ static void portstate_task(void *pv)
     ESP_LOGI(TAG, "Initial contact state: %s", s_last_state ? "OPEN" : "CLOSED");
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(50));
 
-        if (s_cooldown > 0) { s_cooldown--; continue; }
-
-        /* If relay state changed recently, skip detection for 10s */
-#if defined RELAY_ENABLED
-        int current_relay = relay_get() ? 1 : 0;
-        if (current_relay != s_last_relay && s_last_relay >= 0) {
-            s_last_relay = current_relay;
-            s_cooldown = 10;
+        if (s_cooldown > 0) {
+            s_cooldown--;
             continue;
         }
-        s_last_relay = current_relay;
-#endif
 
         int state = portstate_read();
         if (state < 0) continue;
 
         if (state != s_last_state) {
+            /* 50 ms Entprellzeit gegen mechanisches Tasterprellen */
+            vTaskDelay(pdMS_TO_TICKS(50));
+            if (portstate_read() != state) {
+                continue;
+            }
+
             s_last_state = state;
 
             if (state == 1) {
                 /* Contact opened */
                 ESP_LOGI(TAG, "Contact OPEN");
 
-#if defined PORTSTATE_EMAIL
+#if defined PORTSTATE_EMAIL_ENABLED
                 {
                     char srv[64], usr[64], pwd[64], rcp[64];
                     int port = 0;
@@ -90,16 +88,16 @@ static void portstate_task(void *pv)
                 }
 #endif
 
-#if defined SWITCH_ON_CONTACT
-#if defined SWITCH_ON_CONTACT_NIGHT
+#if defined SWITCH_ON_CONTACT_ENABLED
+#if defined SWITCH_ON_CONTACT_NIGHT_ENABLED
                 if (ntp_is_night() && check_activity()) {
                     relay_set(true);
-                    s_cooldown = 100;
+                    s_cooldown = 2000; /* 100s (2000 * 50ms) */
                 }
 #else
                 if (check_activity()) {
                     relay_set(true);
-                    s_cooldown = 20;
+                    s_cooldown = 400;  /* 20s (400 * 50ms) */
                 }
 #endif
 #endif
@@ -107,7 +105,7 @@ static void portstate_task(void *pv)
                 /* Contact closed */
                 ESP_LOGI(TAG, "Contact CLOSED");
 
-#if defined PORTSTATE_EMAIL
+#if defined PORTSTATE_EMAIL_ENABLED
                 {
                     char srv[64], usr[64], pwd[64], rcp[64];
                     int port = 0;
@@ -121,18 +119,17 @@ static void portstate_task(void *pv)
                 }
 #endif
 
-#if defined SWITCH_ON_CONTACT
+#if defined SWITCH_ON_CONTACT_ENABLED
                 relay_set(false);
-                s_cooldown = 10;
+                s_cooldown = 200; /* 10s (200 * 50ms) */
 #endif
-            }
 
-#if defined TOGGLE_RELAYS_SWITCH
-            if (state == 0) {
+#if defined TOGGLE_RELAYS_SWITCH_ENABLED || defined TOGGLE_RELAYS_SWITCH
                 ESP_LOGI(TAG, "Toggle relay");
                 relay_set(!relay_get());
-            }
+                s_cooldown = 4; /* 200ms kurze Sperre gegen Doppel-Tastendruck */
 #endif
+            }
         }
     }
 }
@@ -154,4 +151,4 @@ void portstate_init(void)
     ESP_LOGI(TAG, "Portstate init (GPIO%d)", ACTIVE_PORT_GPIO);
 }
 
-#endif /* PORTSTATE_ENABLED || RX_PORTSTATE_ENABLED */
+#endif

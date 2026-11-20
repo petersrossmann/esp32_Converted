@@ -28,5 +28,5 @@ esp_err_t relay_set(bool on)
 
 bool relay_get(void)
 {
-    return gpio_get_level(RELAY_GPIO) == 1;
+    return g_relay_state;
 }

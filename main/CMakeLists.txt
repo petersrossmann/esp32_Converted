@@ -7,5 +7,6 @@ idf_component_register(
                    "web/duskdawn.tpl"
                    "web/index.html"
                    "web/timeschedule.tpl"
+                   "web/favicon.ico"
     REQUIRES config driver esp_rom app_update esp_http_server esp_http_client esp-tls esp_wifi esp_event esp_netif nvs_flash esp_system esp-idf-lib__dht espressif__esp_lcd_ili9341
 )
